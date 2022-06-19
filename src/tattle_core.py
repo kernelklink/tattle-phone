@@ -4,6 +4,7 @@
 
 import RPi.GPIO as GPIO
 from hook_monitor import HookMonitor, HookState
+from play_dial_tone import DialTone
 from dial_monitor import DialMonitor
 import argparse
 from queue import Queue
@@ -36,6 +37,10 @@ def main():
     hook_monitor.start()
     time.sleep(1)
 
+    # Dial tone Player
+    dial_tone_player = None
+    dial_tone_end = None
+
     hook_state = hook_monitor.hook_state()
     logging.debug("Initial hookstate = {}".format(hook_state))
     # Simple test to monitor hook changes
@@ -50,6 +55,21 @@ def main():
             if( hook_change != hook_state ):
                 logging.debug( "Received a hook change, new value is {}".format(HookMonitor.hook_state_to_str(hook_change)))
                 hook_state = hook_change
+
+                # The current state machine is just hook on, hook off. When we 
+                # change to hook off, start playing the dialtone. When we change
+                # to hook on, stop laying the dial tone
+                if( hook_state == HookState.HOOK_OFF ):
+                    logging.debug("Starting Dialtone")
+                    dial_tone_end = Event()
+                    dial_tone_player = DialTone(dial_tone_end)
+                    dial_tone_player.start()
+                else:
+                    dial_tone_end.set()
+                    logging.debug("Killing Dial Tone")
+                    dial_tone_player.join(_JOIN_TIMEOUT_SEC)
+                    logging.debug("Dial tone joined")
+
         
         # Short sleep for this cycle
         time.sleep(0.1)
