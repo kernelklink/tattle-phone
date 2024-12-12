@@ -30,7 +30,11 @@ class PulseCollector(Thread):
 
             # Output the digit to the customer
             logging.debug( "Collected a digit: {} ".format(self.digit))
-            self.output_queue.put( self.digit )
+            if( self.digit >= 10 ):
+                logging.debug( f"Correcting {self.digit} to 0")
+                self.digit = 0
+
+            self.output_queue.put( ("DIAL", self.digit) )
             self.digit = 0
     
     def pulse(self):
@@ -73,7 +77,7 @@ class DialMonitor(Thread):
     """A class to monitor the phone dial and report back new digits as they arrive
     """
 
-    def __init__(self, dial_pin, input_queue, output_queue, kill_timeout=5, pulse_timeout=0.15) -> None:
+    def __init__(self, dial_pin:int, output_queue:Queue, kill_timeout=5, pulse_timeout=0.15) -> None:
         super().__init__()
 
         # Config items
@@ -83,20 +87,28 @@ class DialMonitor(Thread):
         self.name = "DialMonitor"
 
         # inter-thread comms
-        self.input_queue = input_queue
-        self.output_queue = output_queue
+        self._input_queue = Queue()
+        self._output_queue = output_queue
         self.hook_state = Event()
 
         # initialize State
         self.digit = 0
 
         # Create our pulse collector
-        self.pulse_collector = PulseCollector(pulse_timeout, self.output_queue)
+        self.pulse_collector = PulseCollector(pulse_timeout, self._output_queue)
 
         # Created our Button Handler
-        self.button_handler = ButtonHandler(dial_pin, self.collect_pulses, edge='rising', bouncetime=10)
+        self.button_handler = ButtonHandler(dial_pin, self._collect_pulses, edge='rising', bouncetime=10)
     
-    def collect_pulses(self, pin):
+    def input_queue(self) -> Queue:
+        """Get a reference to the input queue
+
+        Returns:
+            Queue: Input queue
+        """
+        return self._input_queue
+
+    def _collect_pulses(self, pin):
         """Check ths hook position before forwarding off to the pulse collector
 
         Args:
@@ -123,7 +135,7 @@ class DialMonitor(Thread):
         
         # Wait for someone to kill me
         while self.running:
-            item = self.input_queue.get()
+            item = self._input_queue.get()
             logging.debug("Received message {}".format(item))
             if( item == "KILL" ):
                 self.running = False
@@ -140,12 +152,11 @@ if __name__ == "__main__":
     GPIO.setup(dial_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
     # Run a test to see if we can monitor the hook
-
     logging.basicConfig(level=logging.INFO)
 
     dial_input_queue = Queue()
     dial_output_queue = Queue()
-    dial_monitor = DialMonitor(dial_pin, dial_input_queue, dial_output_queue, "HOOK_ON")
+    dial_monitor = DialMonitor(dial_pin, dial_output_queue, "HOOK_ON")
     dial_monitor.start()
 
     dial_digits = 0
@@ -156,9 +167,9 @@ if __name__ == "__main__":
 
     # Collect 5 digits and die
     while( dial_digits < 5 ):
-        change = dial_output_queue.get(30)
+        source,change = dial_output_queue.get(30)
         dial_digits += 1
-        logging.info( "Digit: {}".format(change))
-    # dial_input_queue.put("KILL")
+        logging.info( "{} Digit: {}".format(source,change))
+    dial_input_queue.put("KILL")
     dial_monitor.join()
     GPIO.cleanup()

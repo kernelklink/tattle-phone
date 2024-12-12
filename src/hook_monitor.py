@@ -17,24 +17,31 @@ class HookMonitor(Thread):
     """Monitor the hook switch and signal when the phone is off/on the hook
     """
 
-    def __init__(self, hook_pin, input_queue, output_queue, timeout=5) -> None:
+    def __init__(self, hook_pin:int, output_queue:Queue, timeout=5) -> None:
         """Constructor for HookMonitor object, assumes that the caller has already setup the GPIO pin, but we still need to setup the interrupts.
 
         Args:
             hook_pin (int): the GPIO pin number to monitor for the hook switch
-            input_queue (queue): input queue to receive communication from the owner
-            output_queue (queue): output queue to signal hook changes to the owner
+            output_queue (Queue): Queue to send output that we receive
         """
         super().__init__()
 
         # Save some state
         self._hook_pin = hook_pin
-        self._input_queue = input_queue
+        self._input_queue = Queue()
         self._output_queue = output_queue
         self._hook_state = HookState.HOOK_ON
         self._lock = Lock()
         self._timeout = timeout
         self.name="HookMonitor"
+    
+    def input_queue(self) -> Queue:
+        """Get a reference to the input queue
+
+        Returns:
+            Queue: Input queue
+        """
+        return self._input_queue
     
     def hook_state(self) -> HookState:
         """Return the current hook state.
@@ -69,7 +76,7 @@ class HookMonitor(Thread):
         if( self.running ):
             with self._lock:
                 self._hook_state = HookState(GPIO.input(pin))
-            self._output_queue.put( self._hook_state )
+            self._output_queue.put( ("HOOK", self._hook_state) )
             logging.debug("Something changed on the hook, current value is {}".format(self._hook_state))
         else:
             logging.debug("Looks like I'm not running, but I'm getting interrupts")
@@ -106,16 +113,16 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.DEBUG)
 
-    hook_input_queue = Queue()
     hook_output_queue = Queue()
-    hook_monitor = HookMonitor(hook_pin, hook_input_queue, hook_output_queue)
+    hook_monitor = HookMonitor(hook_pin, hook_output_queue)
+    hook_input_queue = hook_monitor.input_queue()
     hook_monitor.start()
 
     hook_changes = 0
     while( hook_changes < 5 ):
-        change = hook_output_queue.get(30)
+        source,change = hook_output_queue.get(30)
         hook_changes += 1
-        logging.info( "Hook change: {}".format(change))
+        logging.info( "{} change: {}".format(source,change))
     hook_input_queue.put("KILL")
     hook_monitor.join()
     GPIO.cleanup()
