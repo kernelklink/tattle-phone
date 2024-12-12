@@ -3,29 +3,33 @@
 # A class that will cheat and use arecord to record voice messages to a file
 
 import subprocess
-from threading import Event
+from threading import Event, Thread
 import shutil
 import logging
 import time
 from datetime import datetime
+from pathlib import Path
 
-class VoiceRecorder():
+_RECORD_EXECUTABLE = 'arecord'
+
+class VoiceRecorder(Thread):
     """VoiceRecorder class is very direct, basically just records to a file.
     """
     def __init__(self, filename: str):
+        super().__init__()
         self.name = "VoiceRecorder"
-        self._filename = filename
-        self._executable = 'arecord'
+        self._filename = Path(filename)
+        self._executable = shutil.which(_RECORD_EXECUTABLE)
         self._kill_event = Event()
     
     def run(self):
         """Uses arecorord to record to the given wavefile
         """
         # Figure out the location of the executable
-        self._executable = shutil.which(self._executable)
         args = [self._executable, self._filename]
 
         # Start recording to file
+        logging.debug(f"Starting recording to {self._filename.name}")
         proc = subprocess.Popen(args)
 
         # Wait until someone tells us to die
@@ -33,6 +37,7 @@ class VoiceRecorder():
 
         # Die
         proc.kill()
+        logging.debug(f"Completed recording to {self._filename.name}")
     
     def kill(self):
         """Kill the subprocess we started
@@ -44,7 +49,7 @@ if (__name__ == "__main__"):
     """
     print("This test will record a wave file for 8 seconds and then die.")
     recorder = VoiceRecorder("hudson_test.wav")
-    
-    recorder.run()
+    recorder.start()
     time.sleep(8)
     recorder.kill()
+    recorder.join()
