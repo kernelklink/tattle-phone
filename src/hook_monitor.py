@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # hook_monitor
 # 
 # Monitors the hook

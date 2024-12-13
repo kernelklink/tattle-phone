@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # voice-recorder.py
 #
 # A class that will cheat and use arecord to record voice messages to a file

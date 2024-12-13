@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # audio_player.py
 #
 # Class which exists to play audio, and which is made as a Thread so it

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # tattle_core.py
 #
 # Sits in the middle and keeps everything running

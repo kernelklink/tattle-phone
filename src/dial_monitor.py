@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # dial_monitor.py
 #
 # A class to monitor the dial as it turns and report new digits back to the owner
