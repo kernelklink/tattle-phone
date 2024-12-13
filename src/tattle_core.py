@@ -138,6 +138,10 @@ class TattlePhone():
         logging.debug("Initial hookstate = {}".format(self.hook_state))
         if( self.hook_state == HookState.HOOK_OFF):
             self.change_state(TattleState.TATTLE_MENU_ROOT)
+        
+        # Let the user know we're ready.
+        self.audio_player.play_text("I'm all ears")
+        self.audio_player.play_file("../sounds/ready.wav")
 
         while( 1 ):
             logging.debug(f"Currently in {self._state.name}")
