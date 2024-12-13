@@ -20,7 +20,6 @@ class PlayType(enum.Enum):
     PLAYER_KILL=0
     PLAYER_TEXT=1
     PLAYER_FILE=2
-    PLAYER_DIRECTORY=3
 
 _SPEECH_UTIL = 'espeak-ng'
 _PLAYBACK_UTIL = 'aplay'
@@ -53,6 +52,10 @@ class AudioPlayer(Thread):
         """Stop any ongoing playing happening right now
         """
         self._play_interrupt.set()
+
+        # Get rid of anything in the queue
+        while(not self._input_queue.empty()):
+            _ = self._input_queue.get()
     
     def play_text(self, text:str):
         """Render the given text as audio.
@@ -72,14 +75,12 @@ class AudioPlayer(Thread):
 
     def run(self):
         while(1):
-            logging.info("Waiting for a request")
+            logging.info("AudioPlayer: Waiting for a request")
             job_type, item = self._input_queue.get()
 
             args = []
-
-            args = []
             if( job_type == PlayType.PLAYER_TEXT ):
-                logging.info("I've been asked to play this text {}".format(item))
+                logging.info("AudioPlayer: I've been asked to play this text '{}'".format(item))
                 # formulate my arguments and start the process
                 args = [
                     self._speech_util,
@@ -87,25 +88,22 @@ class AudioPlayer(Thread):
                     item]
                 
             elif( job_type == PlayType.PLAYER_FILE ):
-                logging.info("I've been asked to play this file {}".format(item))
+                logging.info("AudioPlayer: I've been asked to play this file '{}'".format(item))
                 # Formulate my rguments and start the process
                 args = [
                     self._playback_util,
                     item
                 ]
 
-            elif( job_type == PlayType.PLAYER_DIRECTORY ):
-                pass
-
             # Let's stop this crazy ride!
             elif( job_type == PlayType.PLAYER_KILL ):
+                logging.info("AudioPlayer: It seems I've been told to die")
                 if( self.proc is not None ):
                     self.proc.kill()
                 break
-
+            
             else:
-                logging.warning("Audio Player started without anything to do")
-                return
+                logging.error(f"AudioPlayer: Unrecognized job type {job_type}:{item}")
             
             # Open a process to play somethign
             if( len(args) > 0 ):
@@ -117,22 +115,28 @@ class AudioPlayer(Thread):
                         break
                 self.proc.kill()
                 self.proc = None
-                if( not self._play_interrupt.is_set() ):
-                    self._output_queue.put(("AUDIO", "DONE"))
-                self._play_interrupt.clear()
+                if( self._play_interrupt.is_set() ):
+                    logging.debug("AudioPlayer: Looks like someone called STOP. Clearing the event")
+                    self._play_interrupt.clear()
+                else:
+                    logging.debug("AudioPlayer: It seems I've died of my own accord, continue!")
+
+                if( self._input_queue.empty() ):
+                    logging.debug("AudioPlayer: Queue is empty! Telling the caller that I'm ready for more")
+                    self._output_queue.put(("AUDIO", None))
 
 if __name__ == "__main__":
-    text_player = AudioPlayer(text="Play some text for me please!")
-    file_player = AudioPlayer(audio_file="../sounds/beep.wav")
+    signal_queue = Queue()
+    audio_player = AudioPlayer(signal_queue)
+    audio_player.start()
 
-    text_player.start()
+    audio_player.play_text("now is the time for all good men to come to the aid of their country.")
+    time.sleep(2)
+    audio_player.stop()
+    audio_player.play_file("../sounds/beep.wav")
 
-    while(text_player.is_alive()):
-        time.sleep(1)
+    source,item = signal_queue.get()
+    print(f"{source}:{item}")
     
-    file_player.start()
-    while( file_player.is_alive() ):
-        time.sleep(1)
-    
-    text_player.join()
-    file_player.join()
+    audio_player.kill()
+    audio_player.join()
