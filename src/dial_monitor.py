@@ -13,35 +13,41 @@ import time
 class PulseCollector(Thread):
     def __init__(self, timeout, output_queue):
         super().__init__(daemon=True)
-        self.timeout = timeout
-        self.output_queue = output_queue
-        self.event = Event()
-        self.digit = 0
+        self._timeout = timeout
+        self._output_queue = output_queue
+        self._event = Event()
+        self._digit = 0
+        self._keep_going = True
         self.name="PulseCollector"
     
     def run(self):
-        while True:
+        while self._keep_going:
             # Wait for first pulse
-            self.event.wait()
+            if( self._event.wait(timeout=2) ):
 
-            # Wait for subsequent pulses
-            while self.event.is_set():
-                self.digit += 1
-                self.event.clear()
-                self.event.wait(self.timeout)
+                # Wait for subsequent pulses
+                while self._event.is_set():
+                    self._digit += 1
+                    self._event.clear()
+                    self._event.wait(self._timeout)
 
-            # Output the digit to the customer
-            logging.debug( "Collected a digit: {} ".format(self.digit))
-            if( self.digit >= 10 ):
-                logging.debug( f"Correcting {self.digit} to 0")
-                self.digit = 0
+                # Output the digit to the customer
+                logging.debug( "Collected a digit: {} ".format(self._digit))
+                if( self._digit >= 10 ):
+                    logging.debug( f"Correcting {self._digit} to 0")
+                    self._digit = 0
 
-            self.output_queue.put( ("DIAL", self.digit) )
-            self.digit = 0
+                self._output_queue.put( ("DIAL", self._digit) )
+                self._digit = 0
+    
+    def kill(self):
+        """Kill this thread
+        """
+        self._keep_going = False
     
     def pulse(self):
         logging.debug("Setting the event")
-        self.event.set()
+        self._event.set()
 
 class ButtonHandler(Thread):
     """Class to act as a software debouncer for the rotary dial.
@@ -78,6 +84,8 @@ class ButtonHandler(Thread):
 class DialMonitor(Thread):
     """A class to monitor the phone dial and report back new digits as they arrive
     """
+    
+    __KILL_CODE = -1
 
     def __init__(self, dial_pin:int, output_queue:Queue, kill_timeout=5, pulse_timeout=0.15) -> None:
         super().__init__()
@@ -91,7 +99,6 @@ class DialMonitor(Thread):
         # inter-thread comms
         self._input_queue = Queue()
         self._output_queue = output_queue
-        self.hook_state = Event()
 
         # initialize State
         self.digit = 0
@@ -102,31 +109,19 @@ class DialMonitor(Thread):
         # Created our Button Handler
         self.button_handler = ButtonHandler(dial_pin, self._collect_pulses, edge='rising', bouncetime=10)
     
-    def input_queue(self) -> Queue:
-        """Get a reference to the input queue
-
-        Returns:
-            Queue: Input queue
+    def kill(self):
+        """Tell this guy to terminate.
         """
-        return self._input_queue
+        self._input_queue.put(DialMonitor.__KILL_CODE)
 
     def _collect_pulses(self, pin):
-        """Check ths hook position before forwarding off to the pulse collector
+        """Forwarding off to the pulse collector
 
         Args:
             pin (int): the GPIO pin that generated the pulse
         """
-        if( not self.hook_state.is_set() ):
-            logging.debug("Got a pulse, sending to pulse collector.")
-            self.pulse_collector.pulse()
-        else:
-            logging.debug("Ignoring pulses as we're on the hook")
-    
-    def set_hook_state(self, state):
-        if( state ):
-            self.hook_state.set()
-        else:
-            self.hook_state.clear()
+        logging.debug("Got a pulse, sending to pulse collector.")
+        self.pulse_collector.pulse()
     
     def run(self):
         self.running = True
@@ -139,11 +134,13 @@ class DialMonitor(Thread):
         while self.running:
             item = self._input_queue.get()
             logging.debug("Received message {}".format(item))
-            if( item == "KILL" ):
+            if( item == DialMonitor.__KILL_CODE ):
                 self.running = False
             else:
                 logging.info("Received an unknown message from input_queue: '{}'".format(item))
         
+        # Clean up our 2 threads
+        self.pulse_collector.kill()
         self.pulse_collector.join()
         logging.info('Exiting...')
 
@@ -156,22 +153,17 @@ if __name__ == "__main__":
     # Run a test to see if we can monitor the hook
     logging.basicConfig(level=logging.INFO)
 
-    dial_input_queue = Queue()
     dial_output_queue = Queue()
-    dial_monitor = DialMonitor(dial_pin, dial_output_queue, "HOOK_ON")
+    dial_monitor = DialMonitor(dial_pin, dial_output_queue)
     dial_monitor.start()
 
-    dial_digits = 0
-    logging.info("Metaphorical phone will be on hook for 5 seconds...")
-    time.sleep(5)
-    logging.info("Picking phone off hook")
-    dial_monitor.set_hook_state(False)
-
     # Collect 5 digits and die
+    logging.info("Capturing 5 digits and then shutting down")
+    dial_digits = 0
     while( dial_digits < 5 ):
         source,change = dial_output_queue.get(30)
         dial_digits += 1
         logging.info( "{} Digit: {}".format(source,change))
-    dial_input_queue.put("KILL")
+    dial_monitor.kill()
     dial_monitor.join()
     GPIO.cleanup()

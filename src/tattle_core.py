@@ -121,7 +121,6 @@ class TattlePhone():
         
         # Instantiate the dial monitor
         self.dial_monitor = DialMonitor(args.dial_pin, self._my_input_queue)
-        self.dial_input_queue = self.dial_monitor.input_queue()
         self.dial_monitor.start()
 
         # Give our threads a moment to start
@@ -225,8 +224,10 @@ class TattlePhone():
         # Cleanup all of our threads
         self.hook_monitor.kill()
         self.hook_monitor.join(_JOIN_TIMEOUT_SEC)
-        self.dial_input_queue.put("KILL")
+        
+        self.dial_monitor.kill()
         self.dial_monitor.join(_JOIN_TIMEOUT_SEC)
+        
         self.audio_player.kill()
         self.audio_player.join()
         GPIO.cleanup()
