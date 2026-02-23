@@ -18,9 +18,12 @@ class HookState(IntEnum):
 class HookMonitor(Thread):
     """Monitor the hook switch and signal when the phone is off/on the hook
     """
+    __KILL_CODE = -1
 
     def __init__(self, hook_pin:int, output_queue:Queue, timeout=5) -> None:
-        """Constructor for HookMonitor object, assumes that the caller has already setup the GPIO pin, but we still need to setup the interrupts.
+        """Constructor for HookMonitor object, assumes that the caller 
+        has already setup the GPIO pin, but we still need to setup the 
+        interrupts.
 
         Args:
             hook_pin (int): the GPIO pin number to monitor for the hook switch
@@ -37,13 +40,10 @@ class HookMonitor(Thread):
         self._timeout = timeout
         self.name="HookMonitor"
     
-    def input_queue(self) -> Queue:
-        """Get a reference to the input queue
-
-        Returns:
-            Queue: Input queue
+    def kill(self):
+        """Tell this guy to terminate.
         """
-        return self._input_queue
+        self._input_queue.put(HookMonitor.__KILL_CODE)
     
     def hook_state(self) -> HookState:
         """Return the current hook state.
@@ -70,7 +70,8 @@ class HookMonitor(Thread):
             return "HOOK_ON"
     
     def hook_change(self, pin):
-        """Monitor the hook for changes, when it changes report that through the output queue
+        """Monitor the hook for changes, when it changes report that 
+        through the output queue
 
         Args:
             pin (int): GPIO pin associated with this change in current
@@ -85,7 +86,8 @@ class HookMonitor(Thread):
 
     
     def run(self):
-        """Setup the interrupt for the hook GPIO pin and monitor it, communicating state back to the caller
+        """Setup the interrupt for the hook GPIO pin and monitor it, 
+        communicating state back to the caller
         """
         self.running = True
         with self._lock:
@@ -95,7 +97,7 @@ class HookMonitor(Thread):
         # Wait for someone to kill me
         while self.running:
             item = self._input_queue.get()
-            if( item == "KILL" ):
+            if( item == HookMonitor.__KILL_CODE ):
                 self.running = False
             else:
                 logging.info("Received an unknown message from input_queue: '{}'".format(item))
@@ -117,7 +119,6 @@ if __name__ == "__main__":
 
     hook_output_queue = Queue()
     hook_monitor = HookMonitor(hook_pin, hook_output_queue)
-    hook_input_queue = hook_monitor.input_queue()
     hook_monitor.start()
 
     hook_changes = 0
@@ -125,6 +126,6 @@ if __name__ == "__main__":
         source,change = hook_output_queue.get(30)
         hook_changes += 1
         logging.info( "{} change: {}".format(source,change))
-    hook_input_queue.put("KILL")
+    hook_monitor.kill()
     hook_monitor.join()
     GPIO.cleanup()

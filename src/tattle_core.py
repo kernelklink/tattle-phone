@@ -117,7 +117,6 @@ class TattlePhone():
 
         # Instantiate the hook monitor
         self.hook_monitor = HookMonitor(args.hook_pin, self._my_input_queue)
-        self.hook_input_queue = self.hook_monitor.input_queue()
         self.hook_monitor.start()
         
         # Instantiate the dial monitor
@@ -223,8 +222,8 @@ class TattlePhone():
                 destination_state = self.playback()
                 self.change_state(destination_state)
 
-        # Cleanup
-        self.hook_input_queue.put("KILL")
+        # Cleanup all of our threads
+        self.hook_monitor.kill()
         self.hook_monitor.join(_JOIN_TIMEOUT_SEC)
         self.dial_input_queue.put("KILL")
         self.dial_monitor.join(_JOIN_TIMEOUT_SEC)
