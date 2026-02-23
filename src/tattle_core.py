@@ -21,6 +21,7 @@ from os import scandir
 import re
 from datetime import datetime
 from pathlib import Path
+import json
 
 _MONTH_MAP = {
     1:  "January",
@@ -49,11 +50,14 @@ class TattleState(enum.Enum):
     TATTLE_MENU_ROOT=2
     TATTLE_RECORD=3
     TATTLE_PLAYBACK=4
+    TATTLE_MAKE_CALL=5
 
 class TattleRootMenu(enum.Enum):
     ROOT_MENU_RECORD=1
     ROOT_MENU_PLAYBACK=2
+    ROOT_MENU_MAKE_CALL=3
 
+_CONTACTS_FILE = "contacts.json"
 
 _HOOK_TIMEOUT_SEC = 0.1
 _JOIN_TIMEOUT_SEC = 10
@@ -122,6 +126,22 @@ class TattlePhone():
         # Instantiate the dial monitor
         self.dial_monitor = DialMonitor(args.dial_pin, self._my_input_queue)
         self.dial_monitor.start()
+        
+        # Get contacts
+        self.contacts = []
+        config_folder = Path(args.config_dir)
+        if( config_folder.exists() ):
+            contacts_file_path = config_folder.joinpath(_CONTACTS_FILE)
+            if( contacts_file_path.exists() ):
+                with open( contacts_file_path, "r" ) as contacts_file:
+                    try:
+                        self.contacts = json.load(contacts_file)
+                    except:
+                        logging.warning(f"Error importing data from contacts file {contacts_file_path}")
+            else:
+                logging.warning(f"Contacts file {contacts_file_path} does not exist")
+        else:
+            logging.warning(f"Config folder {args.config_dir} does not exist")
 
         # Give our threads a moment to start
         time.sleep(1)
@@ -156,9 +176,12 @@ class TattlePhone():
             elif( self._state == TattleState.TATTLE_MENU_ROOT ):
                 # Playback menu selection
                 self.audio_player.play_text(
-                        "To tattle on someone, please dial {record}. To listen to the tattling of others, please dial {playback}" \
+                        "To tattle on someone, please dial {record}. " \
+                        "To listen to the tattling of others, please dial {playback}. " \
+                        "To make a call, please dial {make_call}. " \
                         .format(record=TattleRootMenu.ROOT_MENU_RECORD.value, 
-                                playback=TattleRootMenu.ROOT_MENU_PLAYBACK.value) )
+                                playback=TattleRootMenu.ROOT_MENU_PLAYBACK.value,
+                                make_call=TattleRootMenu.ROOT_MENU_MAKE_CALL.value))
                 
                 # Wait for audio to finish
                 source,item = self._my_input_queue.get()
@@ -186,6 +209,9 @@ class TattlePhone():
                     # Selected playback
                     elif( item == TattleRootMenu.ROOT_MENU_PLAYBACK.value ):
                         self.change_state(TattleState.TATTLE_PLAYBACK)
+                    
+                    elif( item == TattleRootMenu.ROOT_MENU_MAKE_CALL.value ):
+                        self.change_state(TattleState.TATTLE_MAKE_CALL)
                     
                     else:
                         logging.debug(f"Someone dialed {item}, not valid.")
@@ -220,6 +246,34 @@ class TattlePhone():
             elif( self._state == TattleState.TATTLE_PLAYBACK ):
                 destination_state = self.playback()
                 self.change_state(destination_state)
+        
+            elif( self._state == TattleState.TATTLE_MAKE_CALL ):
+                # create call menu and playback
+                menu = ""
+                for i,contact in enumerate(self.contacts):
+                    menu += f"To call {contact['name']}, please dial {i+1}. "
+                self.audio_player.play_text(menu)
+                
+                # Wait for input
+                source,item = self._my_input_queue.get()
+                if( source == "HOOK" and HookState(item) != self.hook_state ):
+                    self.hook_state = item
+                    self.change_state(TattleState.TATTLE_IDLE)
+                    self.audio_player.stop()
+                elif( source == "DIAL" ):
+                    self.audio_player.stop()
+                    
+                    # Check value
+                    contact_index = item - 1
+                    if( contact_index < 0 or contact_index >= len(self.contacts) ):
+                        logging.debug(f"Received unexpected value {item} which is not between 0 and {len(self.contacts)}")
+                        self.audio_player.play_text(f"{item} is not a valid selection")
+                    else:
+                        self.audio_player.play_text(f"I would have called {self.contacts[contact_index]['name']}")
+                        self.change_state(TattleState.TATTLE_MENU_ROOT)
+                        
+                else:
+                    logging.debug(f"Received Unhandled Event: {source}:{item}")
 
         # Cleanup all of our threads
         self.hook_monitor.kill()
@@ -267,6 +321,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--hook_pin", help="GPIO pin where the hook circuit is connected", type=int, default=12)
     parser.add_argument("--dial_pin", help="GPIO pin where the dial circuit is connected", type=int, default=16)
+    parser.add_argument("--config_dir", help="Directory where configuration files can be found. Defaults to /etc/opt/tattle", type=str, default="/etc/opt/tattle")
     args = parser.parse_args()
 
     # Setup GPIO
