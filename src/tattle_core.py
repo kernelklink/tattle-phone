@@ -9,6 +9,7 @@ from hook_monitor import HookMonitor, HookState
 from dial_monitor import DialMonitor
 from voice_recorder import VoiceRecorder
 from audio_player import AudioPlayer
+from sip_controller import SipController, SipState
 import argparse
 from queue import Queue, Empty
 from threading import Event
@@ -51,6 +52,7 @@ class TattleState(enum.Enum):
     TATTLE_RECORD=3
     TATTLE_PLAYBACK=4
     TATTLE_MAKE_CALL=5
+    TATTLE_ON_CALL=6
 
 class TattleRootMenu(enum.Enum):
     ROOT_MENU_RECORD=1
@@ -126,6 +128,10 @@ class TattlePhone():
         # Instantiate the dial monitor
         self.dial_monitor = DialMonitor(args.dial_pin, self._my_input_queue)
         self.dial_monitor.start()
+        
+        # Instantiate the SipController
+        self.sip_controller = SipController(self._my_input_queue)
+        self.sip_controller.start()
         
         # Get contacts
         self.contacts = []
@@ -269,9 +275,23 @@ class TattlePhone():
                         logging.debug(f"Received unexpected value {item} which is not between 0 and {len(self.contacts)}")
                         self.audio_player.play_text(f"{item} is not a valid selection")
                     else:
-                        self.audio_player.play_text(f"I would have called {self.contacts[contact_index]['name']}")
-                        self.change_state(TattleState.TATTLE_MENU_ROOT)
-                        
+                        self.sip_controller.dial(self.contacts[contact_index]['number'])
+                        self.change_state(TattleState.TATTLE_ON_CALL)
+                else:
+                    logging.debug(f"Received Unhandled Event: {source}:{item}")
+            elif( self._state == TattleState.TATTLE_ON_CALL ):
+                # Wait for a input
+                source,item = self._my_input_queue.get()
+                if( source == "HOOK" and HookState(item) != self.hook_state ):
+                    self.hook_state = item
+                    self.sip_controller.hangup()
+                    self.change_state(TattleState.TATTLE_IDLE)
+                elif( source == "SIP" and item == SipState.ON_CALL ):
+                    logging.debug("Call connected")
+                elif( source == "SIP" and item == SipState.READY ):
+                    logging.debug("Call Failed")
+                    self.audio_player.play_text("Call failed.")
+                    self.change_state(TattleState.TATTLE_MENU_ROOT)
                 else:
                     logging.debug(f"Received Unhandled Event: {source}:{item}")
 
@@ -330,7 +350,8 @@ if __name__ == "__main__":
     GPIO.setup(args.dial_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
     # Setup logging
-    logging.basicConfig(level=logging.DEBUG)
+    format = ("%(asctime)s:%(processName)s:%(threadName)s: %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format=format)
 
     # Start the phone
     tattle_phone = TattlePhone()

@@ -46,7 +46,7 @@ class SipController(Thread):
         self.name = "SipController"
         self._state = SipState.STARTUP
     
-    def send_item(self, item:str):
+    def send_item(self, item:any):
         """Sends an item to the output queue
 
         Args:
@@ -54,9 +54,19 @@ class SipController(Thread):
         """
         self._output_queue.put(('SIP', item))
     
+    def change_state(self, target_state:SipState):
+        """Change the SipController state to something different
+
+        Args:
+            target_state (SipState): State we'd like to change to
+        """
+        logging.debug(f"Changing from {self._state} to {target_state}")
+        self._state = target_state
+        self.send_item(target_state)
+    
     def run(self):
         self._sip_client = pexpect.spawn('baresip', encoding='utf-8')
-        self._sip_client.logfile = sys.stdout
+        #self._sip_client.logfile = sys.stdout
         dial_start = datetime.now()
         
         while(not self._kill_event.is_set()):
@@ -66,12 +76,11 @@ class SipController(Thread):
                 try:
                     self._sip_client.expect(_REGISTERED_PATTERN, timeout=10)
                 except pexpect.TIMEOUT as e:
-                    logging.warning("sip client failed to register. Sorry")
+                    logging.warning(f"sip client failed to register. Sorry")
                     self._kill_event.set()
                     continue
                 
-                self._state = SipState.READY
-                self.send_item(self._state.name)
+                self.change_state(SipState.READY)
                 continue
             
             # Listen for a command before entering the state machine
@@ -87,7 +96,7 @@ class SipController(Thread):
                         cmd_str = f"{cmd} {arg}"
                         print(f"Sending str '{cmd_str}'")
                         self._sip_client.sendline(cmd_str)
-                        self._state = SipState.DIALING
+                        self.change_state(SipState.DIALING)
                         dial_start = datetime.now()
                         
                 elif( cmd == SipCommand.Hangup ):
@@ -109,29 +118,30 @@ class SipController(Thread):
                     response = self._sip_client.expect([_ESTABLISHED_PATTERN, _FAIL_PATTERN], timeout=1.0)
                 except pexpect.TIMEOUT as e:
                     if( (datetime.now() - dial_start).total_seconds() > _CALL_TIMEOUT_SEC ):
-                        logging.info("Call failed, hanging up")
+                        logging.info(f"Call failed, hanging up")
                         self._command_queue.put((SipCommand.Hangup, None))
                     else:
                         logging.debug(f"Waiting {_CALL_TIMEOUT_SEC - (datetime.now() - dial_start).total_seconds()} more seconds")
                 else:
                     if( response == 0 ):
-                        self._state = SipState.ON_CALL
+                        logging.info(f"Call connected")
+                        self.change_state(SipState.ON_CALL)
                     elif( response == 1 ):
-                        logging.warning("Call failed")
-                        self._state = SipState.READY
+                        logging.warning(f"Call failed")
+                        self.change_state(SipState.READY)
             
             # Connected waiting for terminate
             elif( self._state == SipState.ON_CALL ):
                 try:
                     self._sip_client.expect(_TERMINATE_PATTERN, timeout=1.0)
                 except pexpect.TIMEOUT as e:
-                    logging.debug("Still on the call")
+                    logging.debug(f"Still on the call")
                 else:
-                    logging.debug("Call terminated.")
-                    self._state = SipState.READY
+                    logging.debug(f"Call terminated.")
+                    self.change_state(SipState.READY)
             
-        logging.debug("Looks like we're dead")
-        self._sip_client.sendline(SipCommand.Quit.value)
+        logging.debug(f"Looks like we're dead")
+        self._sip_client.send(SipCommand.Quit.value)
         self._sip_client.expect('Quit')
         sleep(2)
         
@@ -148,10 +158,10 @@ class SipController(Thread):
     def _do_hangup(self):
         """Private hangup function which does the hanging up
         """
-        logging.debug("Hanging up")
-        self._sip_client.sendline(SipCommand.Hangup.value)
+        logging.debug(f"Hanging up")
+        self._sip_client.send(SipCommand.Hangup.value)
         self._sip_client.expect(_TERMINATE_PATTERN)
-        self._state = SipState.READY
+        self.change_state(SipState.READY)
         
     def dial(self, number:str):
         """Dial the given number
@@ -184,19 +194,25 @@ def main():
         sleep(2.0)
         controller.dial(args.test_number)
     
-    logging.info("Sleeping 20 seconds and hanging up")
-    sleep(20)
-    controller.hangup()
+    # Stay on here until a call is received.
+    while(1):
+        try:
+            source,item = queue.get(timeout=30.0)
+        except Empty:
+            logging.info("Received nothing in return")
+        else:
+            logging.info(f"Received: {source}:{item}")
+            if( item == 'ON_CALL' ):
+                logging.info("Sleeping 20 seconds and hanging up")
+                sleep(20)
+                logging.info("Hanging up")
+                controller.hangup()
+                break
+    
     controller.kill()
     controller.join()
     
-    # try:
-    #     source,item = queue.get(timeout=30.0)
-    # except Empty:
-    #     logging.info("Received nothing in return")
-    # finally:
-    #     controller.kill()
-    #     controller.join()
+    
 
 if( __name__ == "__main__" ):
     main()
