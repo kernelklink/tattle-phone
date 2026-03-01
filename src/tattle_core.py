@@ -181,13 +181,7 @@ class TattlePhone():
                     
             elif( self._state == TattleState.TATTLE_MENU_ROOT ):
                 # Playback menu selection
-                self.audio_player.play_text(
-                        "To tattle on someone, please dial {record}. " \
-                        "To listen to the tattling of others, please dial {playback}. " \
-                        "To make a call, please dial {make_call}. " \
-                        .format(record=TattleRootMenu.ROOT_MENU_RECORD.value, 
-                                playback=TattleRootMenu.ROOT_MENU_PLAYBACK.value,
-                                make_call=TattleRootMenu.ROOT_MENU_MAKE_CALL.value))
+                self.audio_player.play_text(self.get_menu())
                 
                 # Wait for audio to finish
                 source,item = self._my_input_queue.get()
@@ -275,6 +269,7 @@ class TattlePhone():
                         logging.debug(f"Received unexpected value {item} which is not between 0 and {len(self.contacts)}")
                         self.audio_player.play_text(f"{item} is not a valid selection")
                     else:
+                        self.audio_player.play_text(f"Calling {self.contacts[contact_index]['name']}.")
                         self.sip_controller.dial(self.contacts[contact_index]['number'])
                         self.change_state(TattleState.TATTLE_ON_CALL)
                 else:
@@ -305,6 +300,14 @@ class TattlePhone():
         self.audio_player.kill()
         self.audio_player.join()
         GPIO.cleanup()
+    
+    def get_menu(self) -> str:
+        menu = ""
+        menu += "To tattle on someone, please dial {record}. ".format(record=TattleRootMenu.ROOT_MENU_RECORD.value)
+        menu += "To listen to the tattling of others, please dial {playback}. ".format(playback=TattleRootMenu.ROOT_MENU_PLAYBACK.value)
+        if( self.sip_controller.ready()):
+            menu += "To make a call, please dial {make_call}. ".format(make_call=TattleRootMenu.ROOT_MENU_MAKE_CALL.value)
+        return menu
     
     def playback(self) -> TattleState:
         files = list(scandir(_RECORDING_DIR))
@@ -350,7 +353,7 @@ if __name__ == "__main__":
     GPIO.setup(args.dial_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
     # Setup logging
-    format = ("%(asctime)s:%(processName)s:%(threadName)s: %(message)s")
+    format = ("%(processName)s:%(threadName)s: %(message)s")
     logging.basicConfig(level=logging.DEBUG, format=format)
 
     # Start the phone

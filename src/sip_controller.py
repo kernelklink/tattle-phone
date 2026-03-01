@@ -25,6 +25,7 @@ class SipCommand(StrEnum):
     Quit="q"
 
 class SipState(Enum):
+    DEAD=-1
     STARTUP=0
     READY=1
     DIALING=2
@@ -37,10 +38,11 @@ class SipInterrupts(Enum):
         
 
 class SipController(Thread):
-    def __init__(self, output_queue:Queue):
+    def __init__(self, output_queue:Queue, conf_path:str="/etc/opt/baresip/"):
         super().__init__()
         self._command_queue = Queue()
         self._output_queue = output_queue
+        self._conf_path = conf_path
         self._sip_client = None
         self._kill_event = Event()
         self.name = "SipController"
@@ -65,8 +67,8 @@ class SipController(Thread):
         self.send_item(target_state)
     
     def run(self):
-        self._sip_client = pexpect.spawn('baresip', encoding='utf-8')
-        #self._sip_client.logfile = sys.stdout
+        self._sip_client = pexpect.spawn(f'baresip -f {self._conf_path}', encoding='utf-8')
+        self._sip_client.logfile = sys.stdout
         dial_start = datetime.now()
         
         while(not self._kill_event.is_set()):
@@ -76,7 +78,11 @@ class SipController(Thread):
                 try:
                     self._sip_client.expect(_REGISTERED_PATTERN, timeout=10)
                 except pexpect.TIMEOUT as e:
-                    logging.warning(f"sip client failed to register. Sorry")
+                    logging.warning(f"TIMEOUT: sip client failed to register. Sorry")
+                    self._kill_event.set()
+                    continue
+                except pexpect.EOF as e:
+                    logging.warning(f"EOF: SIP client failed to open correctly.")
                     self._kill_event.set()
                     continue
                 
@@ -135,15 +141,31 @@ class SipController(Thread):
                 try:
                     self._sip_client.expect(_TERMINATE_PATTERN, timeout=1.0)
                 except pexpect.TIMEOUT as e:
-                    logging.debug(f"Still on the call")
+                    # Call continues, no change
+                    pass
                 else:
                     logging.debug(f"Call terminated.")
                     self.change_state(SipState.READY)
-            
+        
+        # Move to the DEAD state and attempt to kill the client
+        self.change_state(SipState.DEAD)
         logging.debug(f"Looks like we're dead")
         self._sip_client.send(SipCommand.Quit.value)
-        self._sip_client.expect('Quit')
+        try:
+            self._sip_client.expect('Quit')
+        except pexpect.TIMEOUT as e:
+            logging.warning(f"TIMEOUT: while waiting for quit response")
+        except pexpect.EOF as e:
+            logging.warning(f"EOF: while waiting for quit response.")
         sleep(2)
+    
+    def ready(self) -> bool:
+        """Check if SipController is ready to be used
+
+        Returns:
+            bool: True if we're in the READY state
+        """
+        return (self._state in [SipState.READY])
         
     def kill(self):
         """Kill this thread and the associated process
@@ -160,7 +182,12 @@ class SipController(Thread):
         """
         logging.debug(f"Hanging up")
         self._sip_client.send(SipCommand.Hangup.value)
-        self._sip_client.expect(_TERMINATE_PATTERN)
+        try:
+            self._sip_client.expect(_TERMINATE_PATTERN)
+        except pexpect.TIMEOUT:
+            logging.warning("Timed out while hanging up.")
+        except pexpect.EOF:
+            logging.warning("Unexpected EOF while trying to hang up.")
         self.change_state(SipState.READY)
         
     def dial(self, number:str):
